@@ -2,7 +2,7 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from typing import List, Dict
+from typing import List
 from dataclasses import dataclass
 import time
 import random
