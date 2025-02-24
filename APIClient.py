@@ -4,6 +4,7 @@ import pandas as pd
 from typing import List, Dict, Optional
 from datetime import date, timedelta
 from dataclasses import dataclass
+import TransformDataSources
 
 # Configure logging
 logging.basicConfig(
@@ -87,22 +88,3 @@ class NHLAPIClient:
         except Exception as e:
             logger.error(f"Error getting team stats: {str(e)}")
             raise
-
-# Example usage
-if __name__ == "__main__":
-    client = NHLAPIClient()
-    
-    try:
-        # Get all required statistics
-        summary_stats = client.get_skaters_summary_stats()
-        print(summary_stats)
-        
-        misc_stats = client.get_skaters_miscellaneous_stats()
-        print(misc_stats)
-        
-        team_stats = client.get_team_stats()
-        print(team_stats)
-
-        
-    except Exception as e:
-        print(f"Error in example usage: {e}")
