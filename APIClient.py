@@ -1,10 +1,9 @@
 import logging
 import requests
 import pandas as pd
-from typing import List, Dict, Optional
-from datetime import date, timedelta
+from typing import Dict
+from datetime import date
 from dataclasses import dataclass
-import TransformDataSources
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +17,7 @@ class NHLAPIConfig:
     """Configuration for NHL API client."""
     base_skater_url: str = "https://api.nhle.com/stats/rest/en/skater"
     base_team_url: str = "https://api.nhle.com/stats/rest/en/team"
+    base_schedule_url: str = "https://api-web.nhle.com/v1/schedule"
     season_id: str = "20242025"  # Current season
     game_type_id: int = 2  # Regular season games
 
@@ -85,6 +85,28 @@ class NHLAPIClient:
             df = pd.DataFrame(data['data'])
             logger.info(f"Retrieved team stats for {len(df)} teams")
             return df
+        except Exception as e:
+            logger.error(f"Error getting team stats: {str(e)}")
+            raise
+
+    def get_todays_games_info(self) -> pd.DataFrame:
+        """
+        Get today's games info.
+        """
+
+        today = str(date.today())
+
+        print(today)
+
+        url = f"{self.config.base_schedule_url}/{today}"
+
+        try:
+            data = self._make_request(url)
+            print(data)
+            df = pd.DataFrame(data['gameWeek'])
+            logger.info(f"Retrieved team stats for {len(df)} teams")
+            return df
+        
         except Exception as e:
             logger.error(f"Error getting team stats: {str(e)}")
             raise
