@@ -121,20 +121,3 @@ class PowerPlayScraper:
         # Create DataFrame
         df = pd.DataFrame(all_players_data)
         return df
-
-def main():
-
-    scraper = PowerPlayScraper()
-    
-    try:
-        pp1_data = scraper.get_all_pp1_players()
-        
-        print("\nPP1 Players Sample:")
-        print(pp1_data.head())
-        
-    except Exception as e:
-        print(f"Error in example usage: {e}")
-
-
-if __name__ == "__main__":
-    main()

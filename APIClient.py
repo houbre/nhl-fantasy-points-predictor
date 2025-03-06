@@ -1,6 +1,7 @@
 import logging
 import requests
 import pandas as pd
+import json
 from typing import Dict
 from datetime import date
 from dataclasses import dataclass
@@ -102,8 +103,7 @@ class NHLAPIClient:
 
         try:
             data = self._make_request(url)
-            print(data)
-            df = pd.DataFrame(data['gameWeek'])
+            df = pd.DataFrame(data['gameWeek'][0]['games'])
             logger.info(f"Retrieved team stats for {len(df)} teams")
             return df
         
