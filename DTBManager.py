@@ -22,7 +22,6 @@ class NHLDTBManager:
         self.DB_PASSWORD = "HelloThere",
         self.DB_HOST = "localhost",
         self.DB_PORT = "8080"
-        #self.engine = create_engine(f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASSWORD}%40{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}")
         self.engine = create_engine("postgresql+psycopg2://postgres:HelloThere@localhost:8080/FantasyPointPredictor")
 
     def UpdatePlayersTable(self, PlayersDF: pd.DataFrame):
@@ -34,9 +33,21 @@ class NHLDTBManager:
             logger.error(f"Error while updating the player_season_stats table")
             raise
 
-    def UpdateDailyGamesTable():
-        pass
+    def UpdateDailyGamesTable(self, GamesDF: pd.DataFrame):
+        try:
+            GamesDF.to_sql("daily_games", self.engine, if_exists="append", index=False)
+            logger.info("Succesfully loaded the daily games info into the database")
 
-    def UpdateTeamsTable():
-        pass
+        except Exception as e:
+            logger.error(f"Error while updating the daily_games table")
+            raise
+
+    def UpdateTeamsTable(self, TeamsDF: pd.DataFrame):
+        try:
+            TeamsDF.to_sql("team_season_stats", self.engine, if_exists="append", index=False)
+            logger.info("Succesfully loaded the team stats into the database")
+
+        except Exception as e:
+            logger.error(f"Error while updating the team_season_stats table")
+            raise
 

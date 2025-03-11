@@ -20,12 +20,14 @@ def main():
 
     # Combine the players' statistics into a cleaned dataframe.
     PlayerFantasyStats = TransformDataSources.CombinePlayerDataSources(SkaterSummaryStats, SkaterMiscStats, PowerPlayInfo)
-    #TeamDefensiveStats = TransformDataSources.CleanTeamDataSource(TeamStats)
-    #GameSchedule = TransformDataSources.CleanScheduleDataSource(TodaysSchedule)
+    TeamDefensiveStats = TransformDataSources.CleanTeamDataSource(TeamStats)
+    GameSchedule = TransformDataSources.CleanScheduleDataSource(TodaysSchedule)
 
     # Load the players' and team's statistics into postgres
     NHLDatabaseMgr = DTBManager.NHLDTBManager("HelloThere")
     NHLDatabaseMgr.UpdatePlayersTable(PlayerFantasyStats)
+    NHLDatabaseMgr.UpdateTeamsTable(TeamDefensiveStats)
+    NHLDatabaseMgr.UpdateDailyGamesTable(GameSchedule)
 
 if __name__ == '__main__':
     main()
