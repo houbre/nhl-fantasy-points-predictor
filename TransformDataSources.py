@@ -39,7 +39,6 @@ def CombinePlayerDataSources(SummaryDF: pd.DataFrame, MiscellaneousDF: pd.DataFr
 
 
 def CleanTeamDataSource(TeamDF: pd.DataFrame) -> pd.DataFrame:
-    TeamDF.to_csv('TeamDF.csv', index=False)
 
     TeamDF['fetch_date'] = datetime.today().date()
 

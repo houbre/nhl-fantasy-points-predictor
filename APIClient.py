@@ -19,7 +19,7 @@ class NHLAPIConfig:
     base_skater_url: str = "https://api.nhle.com/stats/rest/en/skater"
     base_team_url: str = "https://api.nhle.com/stats/rest/en/team"
     base_schedule_url: str = "https://api-web.nhle.com/v1/schedule"
-    season_id: str = "20242025"  # Current season
+    season_id: str = "20242025"  # 2024-2025 season
     game_type_id: int = 2  # Regular season games
 
 class NHLAPIClient:
