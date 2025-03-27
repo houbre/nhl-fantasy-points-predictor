@@ -2,6 +2,11 @@ import logging
 import psycopg2
 import pandas as pd
 from datetime import timedelta, datetime
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+import numpy as np
+import os
 
 
 # configure logging
@@ -19,16 +24,16 @@ logger = logging.getLogger(__name__)
 class NHLPointsPredictor:
     def __init__(self):
         '''
-        Database connection parameters
+        Database connection parameters and model configuration
         '''
-
+        # Database connection parameters
         self.DB_HOST = "localhost",
         self.DB_NAME = "FantasyPointPredictor",
         self.DB_USER = "postgres",
         self.DB_PORT = "8080",
         self.DB_PASSOWRD = "HelloThere"
 
-        # Fanatsy points system
+        # Fantasy points system
         self.POINTS_GOAL = 6
         self.POINTS_ASSIST = 4
         self.POINTS_PLUS_MINUS = 1
@@ -37,11 +42,17 @@ class NHLPointsPredictor:
         self.POINTS_HIT = 0.5
         self.POINTS_BLOCK = 1
 
+        # Model features
+        self.FEATURES = [
+            'goals_pg', 'assists_pg', 'plus_minus_pg', 'pp_points_pg',
+            'shots_pg', 'hits_pg', 'blocked_shots_pg', 'pp1_status',
+            'team_pp_percentage', 'opponent_goals_against_per_game'
+        ]
+
     def GetConnection(self):
         """
         Establish and return a connection to the postgres database
         """
-
         try:
             conn = psycopg2.connect(
                 host = self.DB_HOST,
@@ -146,13 +157,18 @@ class NHLPointsPredictor:
                 predictions pred ON pg.player_id = pred.player_id AND pg.game_date = pred.prediction_date
             WHERE
                 pg.games_played > 0
-            --	and player_full_name = 'Adam Fantilli'
             ORDER BY
                 pg.game_date DESC
             """
 
             df = pd.read_sql(query, conn)
             logger.info(f"Retrieved {len(df)} historical data points")
+            
+            # Convert boolean pp1_status to int for model
+            df['pp1_status'] = df['pp1_status'].astype(int)
+            
+            # Fill missing values with mean for numeric columns
+            df[self.FEATURES] = df[self.FEATURES].fillna(df[self.FEATURES].mean())
             
             return df
 
@@ -163,7 +179,351 @@ class NHLPointsPredictor:
         finally:
             conn.close()
 
+    def TrainModel(self, df: pd.DataFrame) -> xgb.XGBRegressor:
+        """
+        Train the model on the historical data.
+        
+        Args:
+            df: DataFrame containing historical data with features and target
+            
+        Returns:
+            Trained XGBoost model
+        """
+        try:
+            # Prepare features and target
+            X = df[self.FEATURES]
+            y = df['actual_points'].fillna(0)  # Fill missing actual points with 0
+            
+            # Split data into training and validation sets
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+            
+            # Initialize and train the model
+            model = xgb.XGBRegressor(
+                objective='reg:squarederror',
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                random_state=42
+            )
+            
+            # Train the model
+            model.fit(
+                X_train, y_train,
+                eval_set=[(X_val, y_val)],
+                early_stopping_rounds=10,
+                verbose=False
+            )
+            
+            # Evaluate the model
+            y_pred = model.predict(X_val)
+            mse = mean_squared_error(y_val, y_pred)
+            r2 = r2_score(y_val, y_pred)
+            
+            logger.info(f"Model trained successfully. MSE: {mse:.4f}, R2: {r2:.4f}")
+            
+            return model
+            
+        except Exception as e:
+            logger.error(f"Error training model: {e}")
+            raise
 
+    def PredictPoints(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predict the points for the players in the dataframe.
+        
+        Args:
+            df: DataFrame containing player features for today's games
+            
+        Returns:
+            DataFrame with predictions and player information
+        """
+        try:
+            # Get today's date
+            today = datetime.now().date()
+            
+            # Get today's games
+            conn = self.GetConnection()
+            query = """
+            SELECT DISTINCT home_team, away_team
+            FROM daily_games
+            WHERE game_date = %s
+            """
+            
+            today_games = pd.read_sql(query, conn, params=[today])
+            
+            if today_games.empty:
+                logger.warning("No games found for today")
+                return pd.DataFrame()
+            
+            # Get players from teams playing today
+            teams_playing = list(set(today_games['home_team'].tolist() + today_games['away_team'].tolist()))
+            teams_condition = " OR ".join([f"team_abrev = '{team}'" for team in teams_playing])
+            
+            query = f"""
+            WITH latest_stats AS (
+                SELECT 
+                    p.*,
+                    ROW_NUMBER() OVER (PARTITION BY p.player_id ORDER BY p.fetch_date DESC) as rn
+                FROM player_season_stats p
+                WHERE {teams_condition}
+            )
+            SELECT 
+                player_id,
+                player_full_name,
+                team_abrev,
+                games_played,
+                goals,
+                assists,
+                plus_minus,
+                pp_points,
+                shots,
+                hits,
+                blocked_shots,
+                pp1_status
+            FROM latest_stats
+            WHERE rn = 1 AND games_played > 0
+            """
+            
+            players_df = pd.read_sql(query, conn)
+            
+            if players_df.empty:
+                logger.warning("No players found for today's games")
+                return pd.DataFrame()
+            
+            # Calculate per game averages
+            players_df['goals_pg'] = players_df['goals'] / players_df['games_played']
+            players_df['assists_pg'] = players_df['assists'] / players_df['games_played']
+            players_df['plus_minus_pg'] = players_df['plus_minus'] / players_df['games_played']
+            players_df['pp_points_pg'] = players_df['pp_points'] / players_df['games_played']
+            players_df['shots_pg'] = players_df['shots'] / players_df['games_played']
+            players_df['hits_pg'] = players_df['hits'] / players_df['games_played']
+            players_df['blocked_shots_pg'] = players_df['blocked_shots'] / players_df['games_played']
+            
+            # Get opponent information
+            players_df['opponent_team'] = players_df.apply(
+                lambda row: today_games[today_games['home_team'] == row['team_abrev']]['away_team'].iloc[0]
+                if row['team_abrev'] in today_games['home_team'].values
+                else today_games[today_games['away_team'] == row['team_abrev']]['home_team'].iloc[0],
+                axis=1
+            )
+            
+            # Get team stats
+            query = """
+            WITH latest_team_stats AS (
+                SELECT 
+                    t.*,
+                    ROW_NUMBER() OVER (PARTITION BY t.team_abrev ORDER BY t.fetch_date DESC) as rn
+                FROM team_season_stats t
+            )
+            SELECT team_abrev, powerplay_percentage, goals_against_per_game
+            FROM latest_team_stats
+            WHERE rn = 1
+            """
+            
+            team_stats = pd.read_sql(query, conn)
+            
+            # Merge team stats
+            players_df = players_df.merge(
+                team_stats,
+                left_on='team_abrev',
+                right_on='team_abrev',
+                suffixes=('', '_team')
+            )
+            
+            players_df = players_df.merge(
+                team_stats,
+                left_on='opponent_team',
+                right_on='team_abrev',
+                suffixes=('', '_opponent')
+            )
+            
+            # Prepare features for prediction
+            X = players_df[self.FEATURES]
+            
+            # Train the model
+            model = self.TrainModel(df)
+            
+            # Make predictions
+            predictions = model.predict(X)
+            
+            # Create results DataFrame
+            results = pd.DataFrame({
+                'player_id': players_df['player_id'],
+                'player_name': players_df['player_full_name'],
+                'team': players_df['team_abrev'],
+                'opponent': players_df['opponent_team'],
+                'predicted_points': predictions
+            })
+            
+            logger.info(f"Generated predictions for {len(results)} players")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error making predictions: {e}")
+            raise
+            
+        finally:
+            conn.close()
 
+    def SaveModel(self, model: object, model_name: str) -> None:
+        """
+        Save the model to the models folder.
+        
+        Args:
+            model: Trained model to save
+            model_name: Name of the model file
+        """
+        try:
+            # Create models directory if it doesn't exist
+            models_dir = "models"
+            if not os.path.exists(models_dir):
+                os.makedirs(models_dir)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{models_dir}/{model_name}_{timestamp}.json"
+            
+            # Save the model
+            model.save_model(filename)
+            logger.info(f"Model saved successfully to {filename}")
+            
+        except Exception as e:
+            logger.error(f"Error saving model: {e}")
+            raise
 
+    def UpdateActualPoints(self) -> None:
+        """
+        Update the actual points for yesterday's predictions based on the games played.
+        """
+        try:
+            # Get yesterday's date
+            yesterday = (datetime.now() - timedelta(days=1)).date()
+            
+            conn = self.GetConnection()
+            
+            # Get yesterday's games
+            query = """
+            SELECT DISTINCT home_team, away_team
+            FROM daily_games
+            WHERE game_date = %s
+            """
+            
+            yesterday_games = pd.read_sql(query, conn, params=[yesterday])
+            
+            if yesterday_games.empty:
+                logger.info("No games found for yesterday")
+                return
+            
+            # Get players from teams that played yesterday
+            teams_playing = list(set(yesterday_games['home_team'].tolist() + yesterday_games['away_team'].tolist()))
+            teams_condition = " OR ".join([f"team_abrev = '{team}'" for team in teams_playing])
+            
+            # Get yesterday's player stats
+            query = f"""
+            WITH player_games AS (
+                SELECT 
+                    p.player_id,
+                    p.player_full_name,
+                    p.team_abrev,
+                    CASE 
+                        WHEN p.team_abrev = g.home_team THEN g.away_team
+                        ELSE g.home_team
+                    END AS opponent_team,
+                    p.goals,
+                    p.assists,
+                    p.plus_minus,
+                    p.pp_points,
+                    p.shots,
+                    p.hits,
+                    p.blocked_shots
+                FROM 
+                    player_season_stats p
+                JOIN 
+                    daily_games g ON (p.team_abrev = g.home_team OR p.team_abrev = g.away_team)
+                WHERE 
+                    g.game_date = %s
+                    AND p.fetch_date = (
+                        SELECT MAX(fetch_date) 
+                        FROM player_season_stats 
+                        WHERE player_id = p.player_id AND fetch_date <= %s
+                    )
+            )
+            SELECT * FROM player_games
+            """
+            
+            players_stats = pd.read_sql(query, conn, params=[yesterday, yesterday])
+            
+            if players_stats.empty:
+                logger.warning("No player stats found for yesterday's games")
+                return
+            
+            # Calculate actual fantasy points
+            players_stats['actual_points'] = (
+                players_stats['goals'] * self.POINTS_GOAL +
+                players_stats['assists'] * self.POINTS_ASSIST +
+                players_stats['plus_minus'] * self.POINTS_PLUS_MINUS +
+                players_stats['pp_points'] * self.POINTS_PP +
+                players_stats['shots'] * self.POINTS_SHOT +
+                players_stats['hits'] * self.POINTS_HIT +
+                players_stats['blocked_shots'] * self.POINTS_BLOCK
+            )
+            
+            # Update predictions table with actual points
+            for _, row in players_stats.iterrows():
+                update_query = """
+                UPDATE predictions 
+                SET actual_points = %s
+                WHERE player_id = %s 
+                AND prediction_date = %s
+                """
+                conn.cursor().execute(update_query, (row['actual_points'], row['player_id'], yesterday))
+            
+            conn.commit()
+            logger.info(f"Updated actual points for {len(players_stats)} players from yesterday's games")
+            
+        except Exception as e:
+            logger.error(f"Error updating actual points: {e}")
+            raise
+            
+        finally:
+            conn.close()
 
+    def SavePredictions(self, predictions_df: pd.DataFrame) -> None:
+        """
+        Save today's predictions to the predictions table.
+        
+        Args:
+            predictions_df: DataFrame containing today's predictions
+        """
+        try:
+            today = datetime.now().date()
+            conn = self.GetConnection()
+            
+            # Insert predictions
+            for _, row in predictions_df.iterrows():
+                insert_query = """
+                INSERT INTO predictions 
+                (prediction_date, player_id, name, team, opponent, predicted_points)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                conn.cursor().execute(insert_query, (
+                    today,
+                    row['player_id'],
+                    row['player_name'],
+                    row['team'],
+                    row['opponent'],
+                    row['predicted_points']
+                ))
+            
+            conn.commit()
+            logger.info(f"Saved {len(predictions_df)} predictions for today's games")
+            
+        except Exception as e:
+            logger.error(f"Error saving predictions: {e}")
+            raise
+            
+        finally:
+            conn.close()
