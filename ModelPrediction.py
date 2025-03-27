@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import numpy as np
 import os
+from xgboost import callback
 
 
 # configure logging
@@ -27,10 +28,10 @@ class NHLPointsPredictor:
         Database connection parameters and model configuration
         '''
         # Database connection parameters
-        self.DB_HOST = "localhost",
-        self.DB_NAME = "FantasyPointPredictor",
-        self.DB_USER = "postgres",
-        self.DB_PORT = "8080",
+        self.DB_HOST = "localhost"
+        self.DB_NAME = "FantasyPointPredictor"
+        self.DB_USER = "postgres"
+        self.DB_PORT = 8080
         self.DB_PASSOWRD = "HelloThere"
 
         # Fantasy points system
@@ -56,7 +57,7 @@ class NHLPointsPredictor:
         try:
             conn = psycopg2.connect(
                 host = self.DB_HOST,
-                databaseName = self.DB_NAME,
+                dbname = self.DB_NAME,
                 user = self.DB_USER,
                 password = self.DB_PASSOWRD,
                 port = self.DB_PORT
@@ -117,7 +118,7 @@ class NHLPointsPredictor:
                         WHERE player_id = p.player_id AND fetch_date <= g.game_date
                     )
                 WHERE 
-                    g.game_date >= {start_date}
+                    g.game_date >= '{start_date}'
             )
 
             SELECT 
@@ -208,13 +209,7 @@ class NHLPointsPredictor:
                 random_state=42
             )
             
-            # Train the model
-            model.fit(
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
-                early_stopping_rounds=10,
-                verbose=False
-            )
+            model.fit(X_train, y_train)
             
             # Evaluate the model
             y_pred = model.predict(X_val)
@@ -317,27 +312,30 @@ class NHLPointsPredictor:
                     ROW_NUMBER() OVER (PARTITION BY t.team_abrev ORDER BY t.fetch_date DESC) as rn
                 FROM team_season_stats t
             )
-            SELECT team_abrev, powerplay_percentage, goals_against_per_game
+            SELECT 
+                team_abrev,
+                powerplay_percentage as team_pp_percentage,
+                goals_against_per_game
             FROM latest_team_stats
             WHERE rn = 1
             """
             
             team_stats = pd.read_sql(query, conn)
             
-            # Merge team stats
+            # Merge team stats (for team's powerplay)
             players_df = players_df.merge(
-                team_stats,
+                team_stats[['team_abrev', 'team_pp_percentage']],
                 left_on='team_abrev',
-                right_on='team_abrev',
-                suffixes=('', '_team')
+                right_on='team_abrev'
             )
             
+            # Merge team stats again (for opponent's goals against)
             players_df = players_df.merge(
-                team_stats,
+                team_stats[['team_abrev', 'goals_against_per_game']],
                 left_on='opponent_team',
                 right_on='team_abrev',
                 suffixes=('', '_opponent')
-            )
+            ).rename(columns={'goals_against_per_game': 'opponent_goals_against_per_game'})
             
             # Prepare features for prediction
             X = players_df[self.FEATURES]
@@ -502,12 +500,15 @@ class NHLPointsPredictor:
             today = datetime.now().date()
             conn = self.GetConnection()
             
+            # Generate model version using timestamp
+            model_version = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
             # Insert predictions
             for _, row in predictions_df.iterrows():
                 insert_query = """
                 INSERT INTO predictions 
-                (prediction_date, player_id, name, team, opponent, predicted_points)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (prediction_date, player_id, name, team, opponent, predicted_points, model_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """
                 conn.cursor().execute(insert_query, (
                     today,
@@ -515,11 +516,12 @@ class NHLPointsPredictor:
                     row['player_name'],
                     row['team'],
                     row['opponent'],
-                    row['predicted_points']
+                    row['predicted_points'],
+                    model_version
                 ))
             
             conn.commit()
-            logger.info(f"Saved {len(predictions_df)} predictions for today's games")
+            logger.info(f"Saved {len(predictions_df)} predictions for today's games with model version {model_version}")
             
         except Exception as e:
             logger.error(f"Error saving predictions: {e}")

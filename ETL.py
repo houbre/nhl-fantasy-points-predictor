@@ -103,9 +103,9 @@ def main():
     logger.info("Starting NHL ETL pipeline")
     
     # Step 1: Collect and store data
-    if not collect_data():
-        logger.error("Data collection failed")
-        return
+    # if not collect_data():
+    #     logger.error("Data collection failed")
+    #     return
         
     # Step 2: Update predictions
     if not update_predictions():
