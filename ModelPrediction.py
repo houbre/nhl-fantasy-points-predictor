@@ -395,10 +395,14 @@ class NHLPointsPredictor:
     def UpdateActualPoints(self) -> None:
         """
         Update the actual points for yesterday's predictions based on the games played.
+        Calculates points based on the difference between today's and yesterday's stats.
         """
         try:
-            # Get yesterday's date
-            yesterday = (datetime.now() - timedelta(days=1)).date()
+            # Get yesterday's and today's dates
+            today = datetime.now()
+            print(today)
+            yesterday = (today - timedelta(days=1))
+            print(yesterday)
             
             conn = self.GetConnection()
             
@@ -419,9 +423,9 @@ class NHLPointsPredictor:
             teams_playing = list(set(yesterday_games['home_team'].tolist() + yesterday_games['away_team'].tolist()))
             teams_condition = " OR ".join([f"team_abrev = '{team}'" for team in teams_playing])
             
-            # Get yesterday's player stats
+            # Get player stats for both today and yesterday
             query = f"""
-            WITH player_games AS (
+            WITH player_stats AS (
                 SELECT 
                     p.player_id,
                     p.player_full_name,
@@ -436,29 +440,47 @@ class NHLPointsPredictor:
                     p.pp_points,
                     p.shots,
                     p.hits,
-                    p.blocked_shots
+                    p.blocked_shots,
+                    p.fetch_date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY p.player_id 
+                        ORDER BY p.fetch_date DESC
+                    ) as rn
                 FROM 
                     player_season_stats p
                 JOIN 
                     daily_games g ON (p.team_abrev = g.home_team OR p.team_abrev = g.away_team)
                 WHERE 
                     g.game_date = %s
-                    AND p.fetch_date = (
-                        SELECT MAX(fetch_date) 
-                        FROM player_season_stats 
-                        WHERE player_id = p.player_id AND fetch_date <= %s
-                    )
+                    AND p.fetch_date <= %s
             )
-            SELECT * FROM player_games
+            SELECT 
+                ps1.player_id,
+                ps1.player_full_name,
+                ps1.team_abrev,
+                ps1.opponent_team,
+                ps1.goals - COALESCE(ps2.goals, 0) as goals,
+                ps1.assists - COALESCE(ps2.assists, 0) as assists,
+                ps1.plus_minus - COALESCE(ps2.plus_minus, 0) as plus_minus,
+                ps1.pp_points - COALESCE(ps2.pp_points, 0) as pp_points,
+                ps1.shots - COALESCE(ps2.shots, 0) as shots,
+                ps1.hits - COALESCE(ps2.hits, 0) as hits,
+                ps1.blocked_shots - COALESCE(ps2.blocked_shots, 0) as blocked_shots
+            FROM 
+                player_stats ps1
+            LEFT JOIN 
+                player_stats ps2 ON ps1.player_id = ps2.player_id AND ps2.rn = 2
+            WHERE 
+                ps1.rn = 1
             """
             
-            players_stats = pd.read_sql(query, conn, params=[yesterday, yesterday])
+            players_stats = pd.read_sql(query, conn, params=[yesterday, today])
             
             if players_stats.empty:
                 logger.warning("No player stats found for yesterday's games")
                 return
             
-            # Calculate actual fantasy points
+            # Calculate actual fantasy points based on the difference in stats
             players_stats['actual_points'] = (
                 players_stats['goals'] * self.POINTS_GOAL +
                 players_stats['assists'] * self.POINTS_ASSIST +
