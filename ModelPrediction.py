@@ -399,10 +399,8 @@ class NHLPointsPredictor:
         """
         try:
             # Get yesterday's and today's dates
-            today = datetime.now()
-            print(today)
-            yesterday = (today - timedelta(days=1))
-            print(yesterday)
+            today = (datetime.now()).date()
+            yesterday = (datetime.now() - timedelta(days=1)).date()
             
             conn = self.GetConnection()
             
