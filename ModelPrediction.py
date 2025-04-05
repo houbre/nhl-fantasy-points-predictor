@@ -47,7 +47,9 @@ class NHLPointsPredictor:
         self.FEATURES = [
             'goals_pg', 'assists_pg', 'plus_minus_pg', 'pp_points_pg',
             'shots_pg', 'hits_pg', 'blocked_shots_pg', 'pp1_status',
-            'team_pp_percentage', 'opponent_goals_against_per_game'
+            'team_pp_percentage', 'opponent_goals_against_per_game',
+            'avg_prediction_error', 'prediction_accuracy', 'last_prediction_error',
+            'prediction_trend'
         ]
 
     def GetConnection(self):
@@ -119,6 +121,51 @@ class NHLPointsPredictor:
                     )
                 WHERE 
                     g.game_date >= '{start_date}'
+            ),
+            prediction_stats AS (
+                SELECT 
+                    player_id,
+                    prediction_date,
+                    predicted_points,
+                    actual_points,
+                    ABS(predicted_points - COALESCE(actual_points, 0)) as prediction_error,
+                    CASE 
+                        WHEN actual_points IS NOT NULL 
+                        THEN ABS(predicted_points - actual_points) <= 1
+                        ELSE NULL
+                    END as accurate_prediction
+                FROM predictions
+                WHERE prediction_date >= '{start_date}'
+            ),
+            player_prediction_metrics AS (
+                SELECT 
+                    player_id,
+                    prediction_date,
+                    AVG(prediction_error) OVER (
+                        PARTITION BY player_id 
+                        ORDER BY prediction_date 
+                        ROWS BETWEEN 5 PRECEDING AND CURRENT ROW
+                    ) as avg_prediction_error,
+                    AVG(CASE WHEN accurate_prediction THEN 1 ELSE 0 END) OVER (
+                        PARTITION BY player_id 
+                        ORDER BY prediction_date 
+                        ROWS BETWEEN 5 PRECEDING AND CURRENT ROW
+                    ) as prediction_accuracy,
+                    LAG(prediction_error) OVER (
+                        PARTITION BY player_id 
+                        ORDER BY prediction_date
+                    ) as last_prediction_error,
+                    AVG(prediction_error) OVER (
+                        PARTITION BY player_id 
+                        ORDER BY prediction_date 
+                        ROWS BETWEEN 3 PRECEDING AND CURRENT ROW
+                    ) - 
+                    AVG(prediction_error) OVER (
+                        PARTITION BY player_id 
+                        ORDER BY prediction_date 
+                        ROWS BETWEEN 6 PRECEDING AND 3 PRECEDING
+                    ) as prediction_trend
+                FROM prediction_stats
             )
 
             SELECT 
@@ -137,7 +184,11 @@ class NHLPointsPredictor:
                 pg.pp1_status,
                 t_team.powerplay_percentage AS team_pp_percentage,
                 t_opp.goals_against_per_game AS opponent_goals_against_per_game,
-                COALESCE(pred.actual_points, NULL) AS actual_points
+                COALESCE(pred.actual_points, NULL) AS actual_points,
+                COALESCE(ppm.avg_prediction_error, 0) as avg_prediction_error,
+                COALESCE(ppm.prediction_accuracy, 0) as prediction_accuracy,
+                COALESCE(ppm.last_prediction_error, 0) as last_prediction_error,
+                COALESCE(ppm.prediction_trend, 0) as prediction_trend
             FROM 
                 player_games pg
             LEFT JOIN 
@@ -156,6 +207,8 @@ class NHLPointsPredictor:
                 )
             LEFT JOIN
                 predictions pred ON pg.player_id = pred.player_id AND pg.game_date = pred.prediction_date
+            LEFT JOIN
+                player_prediction_metrics ppm ON pg.player_id = ppm.player_id AND pg.game_date = ppm.prediction_date
             WHERE
                 pg.games_played > 0
             ORDER BY
@@ -256,6 +309,7 @@ class NHLPointsPredictor:
             teams_playing = list(set(today_games['home_team'].tolist() + today_games['away_team'].tolist()))
             teams_condition = " OR ".join([f"team_abrev = '{team}'" for team in teams_playing])
             
+            # Get player stats and prediction metrics
             query = f"""
             WITH latest_stats AS (
                 SELECT 
@@ -263,22 +317,56 @@ class NHLPointsPredictor:
                     ROW_NUMBER() OVER (PARTITION BY p.player_id ORDER BY p.fetch_date DESC) as rn
                 FROM player_season_stats p
                 WHERE {teams_condition}
+            ),
+            prediction_errors AS (
+                SELECT 
+                    player_id,
+                    prediction_date,
+                    ABS(predicted_points - COALESCE(actual_points, 0)) as prediction_error,
+                    CASE WHEN ABS(predicted_points - COALESCE(actual_points, 0)) <= 1 THEN 1 ELSE 0 END as accurate_prediction
+                FROM predictions
+                WHERE player_id IN (SELECT player_id FROM latest_stats WHERE rn = 1)
+            ),
+            prediction_metrics AS (
+                SELECT 
+                    player_id,
+                    AVG(prediction_error) as avg_prediction_error,
+                    AVG(accurate_prediction) as prediction_accuracy,
+                    MAX(CASE WHEN rn = 1 THEN prediction_error ELSE NULL END) as last_prediction_error,
+                    (
+                        AVG(CASE WHEN rn <= 3 THEN prediction_error ELSE NULL END) - 
+                        AVG(CASE WHEN rn > 3 AND rn <= 6 THEN prediction_error ELSE NULL END)
+                    ) as prediction_trend
+                FROM (
+                    SELECT 
+                        player_id,
+                        prediction_error,
+                        accurate_prediction,
+                        ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY prediction_date DESC) as rn
+                    FROM prediction_errors
+                ) ranked_errors
+                GROUP BY player_id
             )
             SELECT 
-                player_id,
-                player_full_name,
-                team_abrev,
-                games_played,
-                goals,
-                assists,
-                plus_minus,
-                pp_points,
-                shots,
-                hits,
-                blocked_shots,
-                pp1_status
-            FROM latest_stats
-            WHERE rn = 1 AND games_played > 0
+                ls.player_id,
+                ls.player_full_name,
+                ls.team_abrev,
+                ls.games_played,
+                ls.goals,
+                ls.assists,
+                ls.plus_minus,
+                ls.pp_points,
+                ls.shots,
+                ls.hits,
+                ls.blocked_shots,
+                ls.pp1_status,
+                COALESCE(pm.avg_prediction_error, 0) as avg_prediction_error,
+                COALESCE(pm.prediction_accuracy, 0) as prediction_accuracy,
+                COALESCE(pm.last_prediction_error, 0) as last_prediction_error,
+                COALESCE(pm.prediction_trend, 0) as prediction_trend
+            FROM latest_stats ls
+            LEFT JOIN prediction_metrics pm ON ls.player_id = pm.player_id
+            WHERE ls.rn = 1 AND ls.games_played > 0
             """
             
             players_df = pd.read_sql(query, conn)
