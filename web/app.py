@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DTBManager import NHLDTBManager
 import pandas as pd
+from sqlalchemy import text
 
 app = Flask(__name__)
 db = NHLDTBManager(Password="HelloThere")
@@ -24,43 +25,35 @@ def get_predictions():
     search_query = request.args.get('search', '')
     
     # Query the predictions table for the latest date
-    query = """
+    base_query = """
     WITH latest_date AS (
         SELECT MAX(prediction_date) as max_date
         FROM predictions
     )
-    SELECT p.name, p.team, p.opponent, p.predicted_points, p.actual_points, p.prediction_date
+    SELECT p.name, p.team, p.opponent, p.predicted_points, p.actual_points
     FROM predictions p
     JOIN latest_date ld ON p.prediction_date = ld.max_date
     """
     
+    # Add WHERE clause for search if needed
     if search_query:
-        query += f" WHERE LOWER(p.name) LIKE LOWER('%{search_query}%')"
+        base_query += " WHERE LOWER(p.name) LIKE LOWER(:search_pattern)"
+        search_pattern = f"%{search_query}%"
+        query = text(base_query).bindparams(search_pattern=search_pattern)
+    else:
+        query = text(base_query)
     
-    query += " ORDER BY p.predicted_points DESC"
+    # Always order by predicted_points in descending order
+    base_query += " ORDER BY p.predicted_points DESC"
     
     try:
+        logger.info(f"Executing query with search: {search_query}")
         predictions_df = pd.read_sql_query(query, db.engine)
         logger.info(f"Query results: {predictions_df.head()}")
         logger.info(f"Data types: {predictions_df.dtypes}")
         
-        # Convert prediction_date to datetime if it's not already
-        if 'prediction_date' in predictions_df.columns:
-            # Check if the column is already datetime
-            if not pd.api.types.is_datetime64_any_dtype(predictions_df['prediction_date']):
-                # Try to convert to datetime
-                try:
-                    predictions_df['prediction_date'] = pd.to_datetime(predictions_df['prediction_date'])
-                except Exception as e:
-                    logger.error(f"Error converting prediction_date to datetime: {str(e)}")
-                    # If conversion fails, use a default date
-                    predictions_df['prediction_date'] = pd.Timestamp.now().normalize()
-            
-            # Format the date as string
-            predictions_df['prediction_date'] = predictions_df['prediction_date'].dt.strftime('%Y-%m-%d')
-        else:
-            # If prediction_date column doesn't exist, add current date
-            predictions_df['prediction_date'] = pd.Timestamp.now().strftime('%Y-%m-%d')
+        # Ensure the DataFrame is sorted by predicted_points in descending order
+        predictions_df = predictions_df.sort_values(by='predicted_points', ascending=False)
         
         predictions = predictions_df.to_dict('records')
         logger.info(f"First prediction: {predictions[0] if predictions else 'No predictions found'}")

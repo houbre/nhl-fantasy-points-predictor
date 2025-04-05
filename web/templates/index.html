@@ -16,6 +16,7 @@
                 <div class="input-group">
                     <input type="text" id="searchInput" class="form-control" placeholder="Search for a player...">
                     <button class="btn btn-primary" onclick="searchPlayers()">Search</button>
+                    <button class="btn btn-secondary" onclick="clearSearch()">Clear Search</button>
                 </div>
             </div>
         </div>
@@ -46,6 +47,27 @@
                 .then(data => {
                     if (data.success) {
                         console.log('API Response:', data);
+                        displayPredictions(data.data);
+                    } else {
+                        alert('Error fetching predictions: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error fetching predictions');
+                });
+        }
+
+        function clearSearch() {
+            // Clear the search input
+            document.getElementById('searchInput').value = '';
+            
+            // Fetch all predictions (no search query)
+            fetch('/api/predictions')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('API Response (cleared search):', data);
                         displayPredictions(data.data);
                     } else {
                         alert('Error fetching predictions: ' + data.error);
