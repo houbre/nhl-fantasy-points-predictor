@@ -13,10 +13,16 @@
         
         <div class="row mb-4">
             <div class="col-md-6 mx-auto">
-                <div class="input-group">
+                <div class="input-group mb-3">
                     <input type="text" id="searchInput" class="form-control" placeholder="Search for a player...">
                     <button class="btn btn-primary" onclick="searchPlayers()">Search</button>
                     <button class="btn btn-secondary" onclick="clearSearch()">Clear Search</button>
+                </div>
+                <div class="input-group">
+                    <label class="input-group-text" for="dateSelect">Select Date:</label>
+                    <select class="form-select" id="dateSelect" onchange="changeDate()">
+                        <option value="">Loading dates...</option>
+                    </select>
                 </div>
             </div>
         </div>
@@ -40,9 +46,103 @@
     </div>
 
     <script>
+        // Load available dates when page loads
+        function loadDates() {
+            fetch('/api/dates')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const dateSelect = document.getElementById('dateSelect');
+                        dateSelect.innerHTML = '';
+                        
+                        // Add "Latest" option
+                        const latestOption = document.createElement('option');
+                        latestOption.value = '';
+                        latestOption.textContent = 'Latest Predictions';
+                        dateSelect.appendChild(latestOption);
+                        
+                        // Add date options
+                        data.data.forEach(date => {
+                            const option = document.createElement('option');
+                            option.value = date;
+                            
+                            // Format date for display
+                            const dateObj = new Date(date);
+                            const formattedDate = dateObj.toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric'
+                            });
+                            
+                            option.textContent = formattedDate;
+                            dateSelect.appendChild(option);
+                        });
+                    } else {
+                        console.error('Error loading dates:', data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching dates:', error);
+                });
+        }
+
+        function changeDate() {
+            const selectedDate = document.getElementById('dateSelect').value;
+            const searchQuery = document.getElementById('searchInput').value;
+            
+            // Build the URL with both date and search parameters if needed
+            let url = '/api/predictions';
+            const params = new URLSearchParams();
+            
+            if (selectedDate) {
+                params.append('date', selectedDate);
+            }
+            
+            if (searchQuery) {
+                params.append('search', searchQuery);
+            }
+            
+            if (params.toString()) {
+                url += '?' + params.toString();
+            }
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('API Response:', data);
+                        displayPredictions(data.data);
+                    } else {
+                        alert('Error fetching predictions: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error fetching predictions');
+                });
+        }
+
         function searchPlayers() {
             const searchQuery = document.getElementById('searchInput').value;
-            fetch(`/api/predictions?search=${encodeURIComponent(searchQuery)}`)
+            const selectedDate = document.getElementById('dateSelect').value;
+            
+            // Build the URL with both date and search parameters
+            let url = '/api/predictions';
+            const params = new URLSearchParams();
+            
+            if (searchQuery) {
+                params.append('search', searchQuery);
+            }
+            
+            if (selectedDate) {
+                params.append('date', selectedDate);
+            }
+            
+            if (params.toString()) {
+                url += '?' + params.toString();
+            }
+            
+            fetch(url)
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -62,8 +162,16 @@
             // Clear the search input
             document.getElementById('searchInput').value = '';
             
-            // Fetch all predictions (no search query)
-            fetch('/api/predictions')
+            // Get the selected date
+            const selectedDate = document.getElementById('dateSelect').value;
+            
+            // Build the URL with just the date parameter if needed
+            let url = '/api/predictions';
+            if (selectedDate) {
+                url += '?date=' + selectedDate;
+            }
+            
+            fetch(url)
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -97,8 +205,9 @@
             });
         }
 
-        // Load predictions when page loads
+        // Load dates and predictions when page loads
         document.addEventListener('DOMContentLoaded', () => {
+            loadDates();
             searchPlayers();
         });
     </script>
