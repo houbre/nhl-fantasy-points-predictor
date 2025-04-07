@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, jsonify
 import sys
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,6 +17,9 @@ from sqlalchemy import text
 
 app = Flask(__name__)
 db = NHLDTBManager(Password="HelloThere")
+
+# Set timezone to Eastern Time (NHL games are typically in ET)
+eastern = pytz.timezone('America/New_York')
 
 @app.route('/')
 def index():
@@ -37,6 +41,10 @@ def get_dates():
         if not pd.api.types.is_datetime64_any_dtype(dates_df['prediction_date']):
             dates_df['prediction_date'] = pd.to_datetime(dates_df['prediction_date'])
         
+        # Convert to Eastern timezone
+        dates_df['prediction_date'] = dates_df['prediction_date'].dt.tz_localize('UTC').dt.tz_convert(eastern)
+        
+        # Format dates in YYYY-MM-DD format
         dates = dates_df['prediction_date'].dt.strftime('%Y-%m-%d').tolist()
         
         return jsonify({'success': True, 'data': dates})
@@ -98,6 +106,9 @@ def get_predictions():
         if 'prediction_date' in predictions_df.columns:
             if not pd.api.types.is_datetime64_any_dtype(predictions_df['prediction_date']):
                 predictions_df['prediction_date'] = pd.to_datetime(predictions_df['prediction_date'])
+            
+            # Convert to Eastern timezone
+            predictions_df['prediction_date'] = predictions_df['prediction_date'].dt.tz_localize('UTC').dt.tz_convert(eastern)
             
             # Format the date as string
             predictions_df['prediction_date'] = predictions_df['prediction_date'].dt.strftime('%Y-%m-%d')
